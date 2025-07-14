@@ -1,3 +1,5 @@
+# src/data/retrobridge_dataset.py
+
 import os
 import numpy as np
 import pandas as pd
@@ -53,7 +55,8 @@ class RetroBridgeDataset(InMemoryDataset):
             raise NotImplementedError
 
         super().__init__(root=root)
-        self.data, self.slices = torch.load(self.processed_paths[self.file_idx], weights_only=False)
+        self.data, self.slices = torch.load(
+            self.processed_paths[self.file_idx])
 
         if swap:
             self.data = Data(
@@ -77,9 +80,9 @@ class RetroBridgeDataset(InMemoryDataset):
     @property
     def processed_dir(self) -> str:
         if self.extra_nodes:
-            return os.path.join(self.root, f'processed_retrobridge_extra_nodes')
+            return os.path.join(self.root, f'processed_retrobridge_extra_nodes_with_class')
         else:
-            return os.path.join(self.root, f'processed_retrobridge')
+            return os.path.join(self.root, f'processed_retrobridge_with_class')
 
     @property
     def raw_file_names(self):
@@ -109,7 +112,10 @@ class RetroBridgeDataset(InMemoryDataset):
     def process(self):
         table = pd.read_csv(self.split_paths[self.file_idx])
         data_list = []
-        for i, reaction_smiles in enumerate(tqdm(table['reactants>reagents>production'].values)):
+        # USPTO-50k has 10 reaction classes
+        num_reaction_classes = 10
+        # Iterate over both reaction SMILES and reaction class
+        for i, (reaction_smiles, reaction_class) in enumerate(tqdm(table[['reactants>reagents>production', 'class']].values)):
             reactants_smi, _, product_smi = reaction_smiles.split('>')
             rmol = Chem.MolFromSmiles(reactants_smi)
             pmol = Chem.MolFromSmiles(product_smi)
@@ -120,7 +126,8 @@ class RetroBridgeDataset(InMemoryDataset):
             if self.extra_nodes:
                 new_r_num_nodes = p_num_nodes + RetroBridgeDatasetInfos.max_n_dummy_nodes
                 if r_num_nodes > new_r_num_nodes:
-                    print(f'Molecule with |r|-|p| > max_n_dummy_nodes: r={r_num_nodes}, p={p_num_nodes}')
+                    print(
+                        f'Molecule with |r|-|p| > max_n_dummy_nodes: r={r_num_nodes}, p={p_num_nodes}')
                     if self.stage in ['train', 'val']:
                         continue
                     else:
@@ -162,17 +169,24 @@ class RetroBridgeDataset(InMemoryDataset):
                 old2new_idx[new2old_idx] = torch.arange(r_num_nodes)
 
                 r_x = r_x[new2old_idx]
-                r_edge_index = torch.stack([old2new_idx[r_edge_index[0]], old2new_idx[r_edge_index[1]]], dim=0)
-                r_edge_index, r_edge_attr = self.sort_edges(r_edge_index, r_edge_attr, r_num_nodes)
+                r_edge_index = torch.stack(
+                    [old2new_idx[r_edge_index[0]], old2new_idx[r_edge_index[1]]], dim=0)
+                r_edge_index, r_edge_attr = self.sort_edges(
+                    r_edge_index, r_edge_attr, r_num_nodes)
 
                 p_x = p_x[new2old_idx]
-                p_edge_index = torch.stack([old2new_idx[p_edge_index[0]], old2new_idx[p_edge_index[1]]], dim=0)
-                p_edge_index, p_edge_attr = self.sort_edges(p_edge_index, p_edge_attr, r_num_nodes)
+                p_edge_index = torch.stack(
+                    [old2new_idx[p_edge_index[0]], old2new_idx[p_edge_index[1]]], dim=0)
+                p_edge_index, p_edge_attr = self.sort_edges(
+                    p_edge_index, p_edge_attr, r_num_nodes)
 
                 product_mask = ~(p_x[:, -1].bool()).squeeze()
                 assert torch.allclose(r_x[product_mask], p_x[product_mask])
 
-            y = torch.zeros(size=(1, 0), dtype=torch.float)
+            # Convert reaction class to one-hot vector and assign to y
+            # Classes are 1-indexed, so subtract 1 for 0-indexing
+            y = F.one_hot(torch.tensor(reaction_class - 1, dtype=torch.long),
+                          num_classes=num_reaction_classes).float().unsqueeze(0)
             data = Data(
                 x=r_x, edge_index=r_edge_index, edge_attr=r_edge_attr, y=y, idx=i,
                 p_x=p_x, p_edge_index=p_edge_index, p_edge_attr=p_edge_attr,
@@ -182,11 +196,13 @@ class RetroBridgeDataset(InMemoryDataset):
             data_list.append(data)
 
         print(f'Dataset contains {len(data_list)} reactions')
-        torch.save(self.collate(data_list), self.processed_paths[self.file_idx])
+        torch.save(self.collate(data_list),
+                   self.processed_paths[self.file_idx])
 
     @staticmethod
     def compute_graph(molecule, mapping, max_num_nodes, types, bonds):
-        max_num_nodes = max(molecule.GetNumAtoms(), max_num_nodes)  # in case |reactants|-|product| > max_n_dummy_nodes
+        # in case |reactants|-|product| > max_n_dummy_nodes
+        max_num_nodes = max(molecule.GetNumAtoms(), max_num_nodes)
         type_idx = [len(types) - 1] * max_num_nodes
         for i, atom in enumerate(molecule.GetAtoms()):
             type_idx[mapping[atom.GetAtomMapNum()]] = types[atom.GetSymbol()]
@@ -196,8 +212,10 @@ class RetroBridgeDataset(InMemoryDataset):
 
         row, col, edge_type = [], [], []
         for bond in molecule.GetBonds():
-            start_atom_map_num = molecule.GetAtomWithIdx(bond.GetBeginAtomIdx()).GetAtomMapNum()
-            end_atom_map_num = molecule.GetAtomWithIdx(bond.GetEndAtomIdx()).GetAtomMapNum()
+            start_atom_map_num = molecule.GetAtomWithIdx(
+                bond.GetBeginAtomIdx()).GetAtomMapNum()
+            end_atom_map_num = molecule.GetAtomWithIdx(
+                bond.GetEndAtomIdx()).GetAtomMapNum()
             start, end = mapping[start_atom_map_num], mapping[end_atom_map_num]
             row += [start, end]
             col += [end, start]
@@ -205,7 +223,8 @@ class RetroBridgeDataset(InMemoryDataset):
 
         edge_index = torch.tensor([row, col], dtype=torch.long)
         edge_type = torch.tensor(edge_type, dtype=torch.long)
-        edge_attr = F.one_hot(edge_type, num_classes=len(bonds) + 1).to(torch.float)
+        edge_attr = F.one_hot(
+            edge_type, num_classes=len(bonds) + 1).to(torch.float)
 
         return x, edge_index, edge_attr
 
@@ -316,7 +335,8 @@ class RetroBridgeDatasetInfos:
         'N': 0, 'C': 1, 'O': 2, 'S': 3, 'Cl': 4, 'F': 5, 'B': 6, 'Br': 7, 'P': 8,
         'Si': 9, 'I': 10, 'Sn': 11, 'Mg': 12, 'Cu': 13, 'Zn': 14, 'Se': 15, '*': 16,
     }
-    atom_decoder = ['N', 'C', 'O', 'S', 'Cl', 'F', 'B', 'Br', 'P', 'Si', 'I', 'Sn', 'Mg', 'Cu', 'Zn', 'Se', '*']
+    atom_decoder = ['N', 'C', 'O', 'S', 'Cl', 'F', 'B', 'Br',
+                    'P', 'Si', 'I', 'Sn', 'Mg', 'Cu', 'Zn', 'Se', '*']
     max_n_dummy_nodes = 10
 
     def __init__(self, datamodule):
@@ -348,24 +368,30 @@ class RetroBridgeDatasetInfos:
         }
 
         if datamodule.extra_nodes:
-            info_dir = f'{datamodule.data_root}/info_retrobridge_extra_nodes'
+            info_dir = f'{datamodule.data_root}/info_retrobridge_extra_nodes_with_class'
         else:
-            info_dir = f'{datamodule.data_root}/info_retrobridge'
+            info_dir = f'{datamodule.data_root}/info_retrobridge_with_class'
 
         os.makedirs(info_dir, exist_ok=True)
 
         if datamodule.evaluation and os.path.exists(f'{info_dir}/dummy_nodes_dist.txt'):
-            self.dummy_nodes_dist = torch.tensor(np.loadtxt(f'{info_dir}/dummy_nodes_dist.txt'))
+            self.dummy_nodes_dist = torch.tensor(
+                np.loadtxt(f'{info_dir}/dummy_nodes_dist.txt'))
             self.n_nodes = torch.tensor(np.loadtxt(f'{info_dir}/n_counts.txt'))
             self.max_n_nodes = len(self.n_nodes) - 1
-            self.node_types = torch.tensor(np.loadtxt(f'{info_dir}/atom_types.txt'))
-            self.edge_types = torch.tensor(np.loadtxt(f'{info_dir}/edge_types.txt'))
-            self.valency_distribution = torch.tensor(np.loadtxt(f'{info_dir}/valencies.txt'))
+            self.node_types = torch.tensor(
+                np.loadtxt(f'{info_dir}/atom_types.txt'))
+            self.edge_types = torch.tensor(
+                np.loadtxt(f'{info_dir}/edge_types.txt'))
+            self.valency_distribution = torch.tensor(
+                np.loadtxt(f'{info_dir}/valencies.txt'))
             self.nodes_dist = utils.DistributionNodes(self.n_nodes)
         else:
-            self.dummy_nodes_dist = datamodule.dummy_atoms_counts(self.max_n_dummy_nodes)
+            self.dummy_nodes_dist = datamodule.dummy_atoms_counts(
+                self.max_n_dummy_nodes)
             print("Distribution of number of dummy nodes", self.dummy_nodes_dist)
-            np.savetxt(f'{info_dir}/dummy_nodes_dist.txt', self.dummy_nodes_dist.numpy())
+            np.savetxt(f'{info_dir}/dummy_nodes_dist.txt',
+                       self.dummy_nodes_dist.numpy())
 
             self.n_nodes = datamodule.node_counts()
             self.max_n_nodes = len(self.n_nodes) - 1
@@ -432,7 +458,7 @@ class RetroBridgeDatasetInfos:
         self.output_dims = {
             'X': example_batch['x'].size(1),
             'E': example_batch['edge_attr'].size(1),
-            'y': 0
+            'y': example_batch['y'].size(1)
         }
 
         print('Input dims:')
@@ -470,23 +496,28 @@ class RetroBridgeMITDatasetInfos(RetroBridgeDatasetInfos):
         self.atom_weights = None
 
         if datamodule.extra_nodes:
-            info_dir = f'{datamodule.data_root}/info_retrobridge_extra_nodes'
+            info_dir = f'{datamodule.data_root}/info_retrobridge_extra_nodes_with_class'
         else:
-            info_dir = f'{datamodule.data_root}/info_retrobridge'
+            info_dir = f'{datamodule.data_root}/info_retrobridge_with_class'
 
         os.makedirs(info_dir, exist_ok=True)
 
         if True or datamodule.evaluation:
-            self.dummy_nodes_dist = torch.tensor(np.loadtxt(f'{info_dir}/dummy_nodes_dist.txt'))
+            self.dummy_nodes_dist = torch.tensor(
+                np.loadtxt(f'{info_dir}/dummy_nodes_dist.txt'))
             self.n_nodes = torch.tensor(np.loadtxt(f'{info_dir}/n_counts.txt'))
             self.max_n_nodes = len(self.n_nodes) - 1
-            self.node_types = torch.tensor(np.loadtxt(f'{info_dir}/atom_types.txt'))
-            self.edge_types = torch.tensor(np.loadtxt(f'{info_dir}/edge_types.txt'))
+            self.node_types = torch.tensor(
+                np.loadtxt(f'{info_dir}/atom_types.txt'))
+            self.edge_types = torch.tensor(
+                np.loadtxt(f'{info_dir}/edge_types.txt'))
             self.nodes_dist = utils.DistributionNodes(self.n_nodes)
         else:
-            self.dummy_nodes_dist = datamodule.dummy_atoms_counts(self.max_n_dummy_nodes)
+            self.dummy_nodes_dist = datamodule.dummy_atoms_counts(
+                self.max_n_dummy_nodes)
             print("Distribution of number of dummy nodes", self.dummy_nodes_dist)
-            np.savetxt(f'{info_dir}/dummy_nodes_dist.txt', self.dummy_nodes_dist.numpy())
+            np.savetxt(f'{info_dir}/dummy_nodes_dist.txt',
+                       self.dummy_nodes_dist.numpy())
 
             self.n_nodes = datamodule.node_counts()
             self.max_n_nodes = len(self.n_nodes) - 1

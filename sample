@@ -1,0 +1,6 @@
+python sample_slice.py \
+    --gpu-id 1 \
+    --start 100 \
+    --stop 200 \
+    --n-samples 100 \
+    --sample-batch-size 10

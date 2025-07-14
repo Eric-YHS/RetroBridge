@@ -1,0 +1,17 @@
+python parallel_sample.py \
+    --config configs/retrobridge.yaml \
+    --checkpoint checkpoints/retrobridge_30_06_08_18_58/top_5_accuracy/epoch=309_top_5_accuracy=0.883.ckpt \
+    --start_row 100 \
+    --end_row 200 \
+    --n_samples 100 \
+    --output_file samples/test_100-200_results.csv \
+    --n_gpus 4
+
+python parallel_sample.py \
+    --config configs/retrobridge.yaml \
+    --checkpoint checkpoints/retrobridge_30_06_08_18_58/top_5_accuracy/epoch=309_top_5_accuracy=0.883.ckpt \
+    --start_row 100 \
+    --end_row 200 \
+    --n_samples 100 \
+    --output_file samples/test_100-200_results.csv \
+    --n_gpus 4 > parallel_sample_log.txt 2>&1

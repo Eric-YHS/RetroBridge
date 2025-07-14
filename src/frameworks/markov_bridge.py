@@ -1,8 +1,11 @@
+# src/frameworks/markov_bridge.py
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import pytorch_lightning as pl
 import os
+import sys
 
 from src.data import utils
 from src.frameworks.noise_schedule import InterpolationTransition, PredefinedNoiseScheduleDiscrete
@@ -37,8 +40,6 @@ class MarkovBridge(pl.LightningModule):
             train_metrics,
             sampling_metrics,
             visualization_tools,
-            extra_features,
-            domain_features,
             use_context,
             log_every_steps,
             sample_every_val,
@@ -85,9 +86,9 @@ class MarkovBridge(pl.LightningModule):
         self.val_loss = TrainLossDiscrete(lambda_train) if loss_type != 'vlb' else TrainLossVLB(lambda_train)
         self.sampling_metrics = sampling_metrics
 
-        self.visualization_tools = None
-        self.extra_features = extra_features
-        self.domain_features = domain_features
+        self.visualization_tools = visualization_tools
+        self.extra_features = None
+        self.domain_features = None
         self.use_context = use_context
 
         self.model = GraphTransformer(
@@ -109,21 +110,12 @@ class MarkovBridge(pl.LightningModule):
             y_classes=self.ydim_output
         )
 
-        self.save_hyperparameters(
-            'experiment_name',
-            'diffusion_steps',
-            'diffusion_noise_schedule',
-            'transition',
-            'lr',
-            'weight_decay',
-            'n_layers',
-            'hidden_mlp_dims',
-            'hidden_dims',
-            'lambda_train',
-            'use_context',
-            'fix_product_nodes',
-            'loss_type'
-        )
+        self.save_hyperparameters(ignore=[
+            'dataset_infos',
+            'train_metrics',
+            'sampling_metrics',
+            'visualization_tools',
+        ])
 
         self.start_epoch_time = None
         self.train_iterations = None
@@ -141,6 +133,12 @@ class MarkovBridge(pl.LightningModule):
         self.fix_product_nodes = fix_product_nodes
         self.loss_type = loss_type
 
+        # <<< START MODIFICATION
+        # Add attributes to store the last accuracy values
+        self.last_top_1_accuracy = 0.0
+        self.last_top_5_accuracy = 0.0
+        # END MODIFICATION >>>
+
     def configure_optimizers(self):
         return torch.optim.AdamW(
             params=self.model.parameters(),
@@ -156,9 +154,11 @@ class MarkovBridge(pl.LightningModule):
     def process_and_forward(self, data):
         # Getting graphs of reactants (target) and product (context)
         reactants, r_node_mask = utils.to_dense(data.x, data.edge_index, data.edge_attr, data.batch)
+        reactants.y = data.y
         reactants = reactants.mask(r_node_mask)
 
         product, p_node_mask = utils.to_dense(data.p_x, data.p_edge_index, data.p_edge_attr, data.batch)
+        product.y = data.y
         product = product.mask(p_node_mask)
 
         assert torch.allclose(r_node_mask, p_node_mask)
@@ -314,10 +314,18 @@ class MarkovBridge(pl.LightningModule):
             return self.compute_validation_CE_loss(reactants=reactants, pred=pred, i=i)
 
     def on_validation_epoch_end(self):
+        # <<< START MODIFICATION
         self.val_counter += 1
         if self.val_counter % self.sample_every_val == 0:
             self.sample()
-            self.trainer.save_checkpoint(os.path.join(self.checkpoints_dir, 'last.ckpt'))
+        else:
+            # If not sampling this epoch, log the last known accuracy values.
+            # This ensures the keys are always available for ModelCheckpoint.
+            self.log('top_1_accuracy', self.last_top_1_accuracy, on_step=False, on_epoch=True, prog_bar=True)
+            self.log('top_5_accuracy', self.last_top_5_accuracy, on_step=False, on_epoch=True, prog_bar=True)
+
+        self.trainer.save_checkpoint(os.path.join(self.checkpoints_dir, 'last.ckpt'))
+        # END MODIFICATION >>>
 
     def sample(self):
         samples_left_to_generate = self.samples_to_generate
@@ -383,8 +391,16 @@ class MarkovBridge(pl.LightningModule):
             atom_decoder=self.dataset_info.atom_decoder,
             grouped_scores=grouped_scores,
         )
+        # <<< START MODIFICATION
         for metric_name, metric in to_log.items():
-            self.log(metric_name, metric)
+            # Log the metric
+            self.log(metric_name, metric, on_step=False, on_epoch=True, prog_bar=True)
+            # Store the latest value in the instance attribute
+            if metric_name == 'top_1_accuracy':
+                self.last_top_1_accuracy = metric
+            elif metric_name == 'top_5_accuracy':
+                self.last_top_5_accuracy = metric
+        # END MODIFICATION >>>
 
         to_log = self.sampling_metrics(samples)
         for metric_name, metric in to_log.items():
@@ -502,6 +518,7 @@ class MarkovBridge(pl.LightningModule):
     def sample_chain_no_true_no_save(self, data, batch_size, use_one_hot=False):
         # Context product
         product, node_mask = utils.to_dense(data.p_x, data.p_edge_index, data.p_edge_attr, data.batch)
+        product.y = data.y
         product = product.mask(node_mask)
 
         # Creating context
@@ -513,7 +530,7 @@ class MarkovBridge(pl.LightningModule):
         assert torch.all(fixed_nodes | modifiable_nodes)
 
         # z_T – starting state (product)
-        X, E, y = product.X, product.E, torch.empty((node_mask.shape[0], 0), device=self.device)
+        X, E, y = product.X, product.E, data.y
 
         assert (E == torch.transpose(E, 1, 2)).all()
 
@@ -557,10 +574,12 @@ class MarkovBridge(pl.LightningModule):
     ):
         # Context product
         product, node_mask = utils.to_dense(data.p_x, data.p_edge_index, data.p_edge_attr, data.batch)
+        product.y = data.y
         product = product.mask(node_mask)
 
         # Discrete context product
         product_discrete, _ = utils.to_dense(data.p_x, data.p_edge_index, data.p_edge_attr, data.batch)
+        product_discrete.y = data.y
         product_discrete = product_discrete.mask(node_mask, collapse=True)
 
         # Creating context
@@ -572,7 +591,7 @@ class MarkovBridge(pl.LightningModule):
         assert torch.all(fixed_nodes | modifiable_nodes)
 
         # z_T – starting state (product)
-        X, E, y = product.X, product.E, torch.empty((node_mask.shape[0], 0), device=self.device)
+        X, E, y = product.X, product.E, data.y
 
         assert (E == torch.transpose(E, 1, 2)).all()
         assert number_chain_steps_to_save < self.T
@@ -770,8 +789,8 @@ class MarkovBridge(pl.LightningModule):
         assert (E_s == torch.transpose(E_s, 1, 2)).all()
         assert (X_t.shape == X_s.shape) and (E_t.shape == E_s.shape)
 
-        out_one_hot = utils.PlaceHolder(X=X_s, E=E_s, y=torch.zeros(y_t.shape[0], 0))
-        out_discrete = utils.PlaceHolder(X=X_s, E=E_s, y=torch.zeros(y_t.shape[0], 0))
+        out_one_hot = utils.PlaceHolder(X=X_s, E=E_s, y=y_t)
+        out_discrete = utils.PlaceHolder(X=X_s, E=E_s, y=y_t)
 
         # Likelihood
         node_log_likelihood = torch.log(prob_X) + torch.log(pred_X)
@@ -859,6 +878,10 @@ class MarkovBridge(pl.LightningModule):
     def compute_extra_data(self, noisy_data, context=None, condition_on_t=True):
         """ At every training step (after adding noise) and step in sampling, compute extra information and append to
             the network input. """
+        
+        # This check is crucial to ensure the objects are set before use.
+        if self.extra_features is None or self.domain_features is None:
+            raise ValueError("extra_features and domain_features must be set on the model instance before training.")
 
         extra_features = self.extra_features(noisy_data)
         extra_molecular_features = self.domain_features(noisy_data)
