@@ -1,0 +1,33 @@
+base:
+top-1:0.47873 
+top-3:0.672059  
+top-5:0.713801
+
+model with classifier:
+                top-1     top-3    top-5    top-10
+Exact match  0.491312  0.654883  0.68564  0.699621
+
+Total: 128poch=659:
+Top-1 accuracy: 0.546875
+Top-3 accuracy: 0.6875
+Top-5 accuracy: 0.703125
+
+--- 评估结果 ---
+                top-1     top-3     top-5   top-10
+Exact match  0.488916  0.648892  0.677452  0.69283
+
+Total: 128poch=739:
+Top-1 accuracy: 0.515625
+Top-3 accuracy: 0.6640625
+Top-5 accuracy: 0.765625
+
+                top-1     top-3    top-5    top-10
+Exact match  0.491312  0.654883  0.68564  0.699621
+
+
+Total: 128poch=779: 
+Top-1 accuracy: 0.484375
+Top-3 accuracy: 0.6953125
+Top-5 accuracy: 0.7421875
+
+

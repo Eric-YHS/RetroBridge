@@ -8,7 +8,7 @@ seed: 42
 device: gpu # 或者 'cpu'
 
 # Settings (这些是MarkovBridge或其父类可能用到的通用设置)
-sample_every_val: 10 # 每 N 个验证周期进行一次采样和评估
+sample_every_val: 1 # 每 N 个验证周期进行一次采样和评估
 log_every_steps: 50 # 每 N 步记录一次训练日志
 samples_to_generate: 128 # 验证/测试时生成的总样本数 (会分批次)
 samples_to_save: 128 # 保存到可视化文件的样本数
@@ -19,7 +19,7 @@ enable_progress_bar: True
 
 # Data
 dataset: uspto50k # 明确使用 uspto50k
-batch_size: 10 # 根据你的GPU显存调整，原为64，可能会因新分类器增加内存占用
+batch_size: 128 # 根据你的GPU显存调整，原为64，可能会因新分类器增加内存占用
 num_workers: 6 # 原为1，可以适当增加以加速数据加载
 shuffle: True
 extra_nodes: True # 是否为产物图添加虚拟节点 (RetroBridge 通常为 True)
@@ -50,7 +50,7 @@ hidden_dims: {
 # Training
 n_epochs: 1000
 lambda_train: [5, 0] # X, E, y 的CE损失权重 (y通常为0，因为retro模型不直接预测全局y)
-lr: 0.0002
+lr: 0.0016
 weight_decay: 0.000000000001 # 1e-12
 loss_type: cross_entropy # 'cross_entropy' 或 'vlb'
 
@@ -68,5 +68,5 @@ lambda_classification_loss: 0.2 # 辅助分类损失的权重 (例如0.1, 0.2, 0
 
 # Checkpoint
 resume:
-  retrobridge_with_classifier_03_06_05_13_11 # 要继续的实验的名称 (例如 'retrobridge_experiment_XYZ_timestamp')
+  null # 要继续的实验的名称 (例如 'retrobridge_experiment_XYZ_timestamp')
   # 如果为 null，则开始新训练或尝试从 'checkpoints/experiment_name_timestamp/last.ckpt' 继续（如果存在）

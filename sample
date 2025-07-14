@@ -1,6 +1,31 @@
-python sample_slice.py \
-    --gpu-id 1 \
-    --start 100 \
-    --stop 200 \
-    --n-samples 100 \
-    --sample-batch-size 10
+python sample.py \
+    --config configs/retrobridge.yaml \
+    --checkpoint checkpoints/retrobridge_with_classifier_03_06_05_13_11/last.ckpt \
+    --samples samples_new_model \
+    --model RetroBridge \
+    --mode test \
+    --n_samples 10 \
+    --n_steps 500 \
+    --sampling_seed 42 
+
+python sample.py \
+    --config configs/retrobridge.yaml \
+    --checkpoint checkpoints/retrobridge_with_classifier_03_06_05_13_11/top_5_accuracy/epoch=829_top_5_accuracy=0.000.ckpt \
+    --samples samples_new_model \
+    --model RetroBridge \
+    --mode test \
+    --n_samples 100 \
+    --n_steps 500 \
+    --sampling_seed 42 
+
+python sample.py \
+    --config configs/retrobridge.yaml \
+    --checkpoint checkpoints/retrobridge_with_classifier_03_06_05_13_11/top_1_accuracy/epoch=659_top_1_accuracy=0.000-v1.ckpt \
+    --samples samples_new_model \
+    --model RetroBridge \
+    --mode test \
+    --n_samples 10 \
+    --n_steps 500 \
+    --sampling_seed 42 
+
+24000
