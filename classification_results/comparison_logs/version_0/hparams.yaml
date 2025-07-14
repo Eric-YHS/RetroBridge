@@ -1,9 +1,0 @@
-batch_size: 2048
-data_dir: ./datasets
-fp_bits: 1024
-fp_radius: 2
-input_dim_fp: 1024
-learning_rate: 0.0032
-num_classes: 10
-num_workers: 4
-weight_decay: 1.0e-05

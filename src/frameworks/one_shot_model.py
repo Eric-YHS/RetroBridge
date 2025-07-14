@@ -196,7 +196,7 @@ class OneShotModel(pl.LightningModule):
 
         return {'loss': loss}
 
-    def on_validation_epoch_end(self, outs):
+    def on_validation_epoch_end(self):
         self.val_counter += 1
         if self.val_counter % self.sample_every_val == 0:
             self.sample()

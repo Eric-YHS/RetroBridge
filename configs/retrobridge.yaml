@@ -1,43 +1,44 @@
 # General
-experiment_name: retrobridge_with_classifier # 可以修改实验名以区分
+experiment_name: retrobridge
 checkpoints: checkpoints
 logs: logs
-data: data # 数据根目录
-wandb_entity: null # 你的 W&B entity (如果使用)
+data: data
+wandb_entity: null
 seed: 42
-device: gpu # 或者 'cpu'
+device: gpu
 
-# Settings (这些是MarkovBridge或其父类可能用到的通用设置)
-sample_every_val: 10 # 每 N 个验证周期进行一次采样和评估
-log_every_steps: 50 # 每 N 步记录一次训练日志
-samples_to_generate: 128 # 验证/测试时生成的总样本数 (会分批次)
-samples_to_save: 128 # 保存到可视化文件的样本数
-samples_per_input: 10 # 每个输入产物生成的候选反应物数量 (影响Top-K计算)
-chains_to_save: 5 # 保存可视化链的数量
-number_chain_steps_to_save: 50 # 可视化链中保存的步数
+# Settings
+sample_every_val: 10
+log_every_steps: 50
+samples_to_generate: 128
+samples_to_save: 128
+samples_per_input: 10
+chains_to_save: 5
+number_chain_steps_to_save: 50
 enable_progress_bar: True
 
 # Data
-dataset: uspto50k # 明确使用 uspto50k
-batch_size: 10 # 根据你的GPU显存调整，原为64，可能会因新分类器增加内存占用
-num_workers: 6 # 原为1，可以适当增加以加速数据加载
+dataset: uspto50k
+batch_size: 128
+num_workers: 16
 shuffle: True
-extra_nodes: True # 是否为产物图添加虚拟节点 (RetroBridge 通常为 True)
-swap: False # 是否交换反应物和产物 (RetroBridge 通常为 False)
+extra_nodes: True
+swap: False
 
-# Diffusion (这些参数由 MarkovBridge 使用)
+# Diffusion
 diffusion_steps: 500
-diffusion_noise_schedule: cosine # 例如: cosine, linear, polynomial
-transition: interpolation # MarkovBridge 特有的，虽在__init__中未直接用此名，但内部逻辑是插值
-fix_product_nodes: True # RetroBridge 通常为 True (在马尔可夫桥中固定产物的已知部分)
+diffusion_noise_schedule: cosine
+transition: null
+fix_product_nodes: True
 
-# Model (GraphTransformer 和 MarkovBridge 共享的参数)
-use_context: True # 是否使用产物作为上下文信息
-extra_features: all # 'all', 'cycles', 'eigenvalues', 'none'
-extra_molecular_features: False # 是否使用额外的基于化学的特征
+# Model
+use_context: True
+extra_features: all
+extra_molecular_features: True
 n_layers: 5
-hidden_mlp_dims: { "X": 256, "E": 128, "y": 128 } # MLP内部隐藏层维度
-hidden_dims: {
+hidden_mlp_dims: { "X": 256, "E": 128, "y": 128 }
+hidden_dims:
+  {
     "dx": 256,
     "de": 64,
     "dy": 64,
@@ -45,28 +46,14 @@ hidden_dims: {
     "dim_ffX": 256,
     "dim_ffE": 128,
     "dim_ffy": 128,
-  } # Transformer各部分特征维度
+  }
 
 # Training
 n_epochs: 1000
-lambda_train: [5, 0] # X, E, y 的CE损失权重 (y通常为0，因为retro模型不直接预测全局y)
+lambda_train: [5, 1.0]
 lr: 0.0002
-weight_decay: 0.000000000001 # 1e-12
-loss_type: cross_entropy # 'cross_entropy' 或 'vlb'
-
-# ---- MODIFICATION START: Auxiliary Classification Task Config ----
-# 这些参数将由 train.py 读取并通过 args 传递给 MarkovBridge 的 __init__
-intermediate_layer_idx_for_classification: 3 # 从 GraphTransformer 的第几层之后提取 y (1-indexed)
-morgan_fp_radius: 2 # 摩根指纹的半径
-morgan_fp_bits: 1024 # 摩根指纹的位数
-classifier_hidden_dims: [256, 128] # 辅助分类器的隐藏层维度列表
-lambda_classification_loss: 0.2 # 辅助分类损失的权重 (例如0.1, 0.2, 0.5, 1.0，需要调整)
-# num_reaction_classes: 10 # 这个值最好由代码从数据中自动推断，但如果需要固定，可以在这里设置，
-# 然后在代码中优先使用这里的配置值。
-# RetroBridgeDatasetInfos 现在会尝试自动计算它。
-# ---- MODIFICATION END ----
+weight_decay: 0.000000000001
+loss_type: cross_entropy
 
 # Checkpoint
-resume:
-  retrobridge_with_classifier_03_06_05_13_11 # 要继续的实验的名称 (例如 'retrobridge_experiment_XYZ_timestamp')
-  # 如果为 null，则开始新训练或尝试从 'checkpoints/experiment_name_timestamp/last.ckpt' 继续（如果存在）
+resume: null

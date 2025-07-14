@@ -260,7 +260,7 @@ class DiscreteDiffusion(pl.LightningModule):
         )
         return {'loss': nll}
 
-    def on_validation_epoch_end(self, outs):
+    def on_validation_epoch_end(self):
         self.log(f'val/epoch_NLL', self.val_nll.compute())
         self.log(f'val/X_kl', self.val_X_kl.compute() * self.T)
         self.log(f'val/E_kl', self.val_E_kl.compute() * self.T)

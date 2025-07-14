@@ -8,7 +8,8 @@ class PlaceHolder:
     def __init__(self, X, E, y=None):
         self.X = X
         self.E = E
-        self.y = y if y is not None else torch.zeros(size=(self.X.shape[0], 0), dtype=torch.float, device=X.device)
+        self.y = y if y is not None else torch.zeros(
+            size=(self.X.shape[0], 0), dtype=torch.float, device=X.device)
 
     def type_as(self, x: torch.Tensor):
         self.X = self.X.type_as(x)
@@ -17,17 +18,32 @@ class PlaceHolder:
         return self
 
     def mask(self, node_mask, collapse=False):
-        x_mask = node_mask.unsqueeze(-1)          # bs, n, 1
-        e_mask1 = x_mask.unsqueeze(2)             # bs, n, 1, 1
-        e_mask2 = x_mask.unsqueeze(1)             # bs, 1, n, 1
+        x_mask = node_mask.unsqueeze(-1)      # bs, n, 1
+        e_mask1 = x_mask.unsqueeze(2)         # bs, n, 1, 1
+        e_mask2 = x_mask.unsqueeze(1)         # bs, 1, n, 1
 
         if collapse:
-            self.X = torch.argmax(self.X, dim=-1)
-            self.E = torch.argmax(self.E, dim=-1)
+            # ----------- 节点 -----------
+            if self.X.dim() == 3:             # one‑hot (bs, n, d)
+                self.X = torch.argmax(self.X, dim=-1)   # → (bs, n)
+            elif self.X.dim() == 2:           # already discrete (bs, n)
+                pass                          # 不再二次 argmax
+            else:
+                raise ValueError(f"Unexpected X shape {self.X.shape}")
 
-            self.X[node_mask == 0] = - 1
-            self.E[(e_mask1 * e_mask2).squeeze(-1) == 0] = - 1
+            # ----------- 边 -------------
+            if self.E.dim() == 4:             # one‑hot (bs, n, n, d)
+                self.E = torch.argmax(self.E, dim=-1)   # → (bs, n, n)
+            elif self.E.dim() == 3:           # already discrete (bs, n, n)
+                pass
+            else:
+                raise ValueError(f"Unexpected E shape {self.E.shape}")
+
+            # 应用掩码
+            self.X[node_mask == 0] = -1
+            self.E[(e_mask1 * e_mask2).squeeze(-1) == 0] = -1
         else:
+            # 保持 one‑hot，直接按掩码乘 0
             self.X = self.X * x_mask
             self.E = self.E * e_mask1 * e_mask2
             assert torch.allclose(self.E, torch.transpose(self.E, 1, 2))
@@ -77,15 +93,22 @@ class DistributionNodes:
         return log_p
 
 
-def to_dense(x, edge_index, edge_attr, batch, explicitly_encode_no_edge=True):
+def to_dense(x, edge_index, edge_attr, batch, y=None, explicitly_encode_no_edge=True):  # 增加 y=None
     X, node_mask = to_dense_batch(x=x, batch=batch)
-    edge_index, edge_attr = torch_geometric.utils.remove_self_loops(edge_index, edge_attr)
+    edge_index, edge_attr = torch_geometric.utils.remove_self_loops(
+        edge_index, edge_attr)
     max_num_nodes = X.size(1)
-    E = to_dense_adj(edge_index=edge_index, batch=batch, edge_attr=edge_attr, max_num_nodes=max_num_nodes)
+    E = to_dense_adj(edge_index=edge_index, batch=batch,
+                     edge_attr=edge_attr, max_num_nodes=max_num_nodes)
     if explicitly_encode_no_edge:
         E = encode_no_edge(E)
 
-    return PlaceHolder(X=X, E=E), node_mask
+    # 如果 y 没有被传递，就保持原来的行为
+    if y is None:
+        y = torch.zeros(size=(X.shape[0], 0),
+                        dtype=torch.float, device=X.device)
+
+    return PlaceHolder(X=X, E=E, y=y), node_mask  # 将 y 传递给 PlaceHolder
 
 
 def encode_no_edge(E):
@@ -97,13 +120,15 @@ def encode_no_edge(E):
     first_elt = E[:, :, :, 0]
     first_elt[no_edge] = 1
     E[:, :, :, 0] = first_elt
-    diag = torch.eye(E.shape[1], dtype=torch.bool).unsqueeze(0).expand(E.shape[0], -1, -1)
+    diag = torch.eye(E.shape[1], dtype=torch.bool).unsqueeze(
+        0).expand(E.shape[0], -1, -1)
     E[diag] = 0
     return E
 
 
 def create_true_reactant_molecules(data, batch_size):
-    reactants, r_node_mask = to_dense(data.x, data.edge_index, data.edge_attr, data.batch)
+    reactants, r_node_mask = to_dense(
+        data.x, data.edge_index, data.edge_attr, data.batch)
     reactants = reactants.mask(r_node_mask, collapse=True)
     n_nodes = scatter(torch.ones_like(data.batch), data.batch, reduce='sum')
     true_molecule_list = []
@@ -129,7 +154,8 @@ def create_pred_reactant_molecules(X, E, batch_mask, batch_size):
 
 
 def create_input_product_molecules(data, batch_size):
-    products, p_node_mask = to_dense(data.p_x, data.p_edge_index, data.p_edge_attr, data.batch)
+    products, p_node_mask = to_dense(
+        data.p_x, data.p_edge_index, data.p_edge_attr, data.batch)
     products = products.mask(p_node_mask, collapse=True)
     n_nodes = scatter(torch.ones_like(data.batch), data.batch, reduce='sum')
     products_list = []
