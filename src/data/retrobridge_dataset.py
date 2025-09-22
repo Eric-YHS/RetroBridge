@@ -60,6 +60,7 @@ class RetroBridgeDataset(InMemoryDataset):
                 x=self.data.p_x, edge_index=self.data.p_edge_index, edge_attr=self.data.p_edge_attr,
                 p_x=self.data.x, p_edge_index=self.data.edge_index, p_edge_attr=self.data.edge_attr,
                 y=self.data.y, idx=self.data.idx, r_smiles=self.data.p_smiles, p_smiles=self.data.r_smiles,
+                reaction_class=self.data.reaction_class,  # 保持类别信息不变
             )
             self.slices = {
                 'x': self.slices['p_x'],
@@ -72,6 +73,7 @@ class RetroBridgeDataset(InMemoryDataset):
                 'p_edge_attr': self.slices['edge_attr'],
                 'r_smiles': self.slices['p_smiles'],
                 'p_smiles': self.slices['r_smiles'],
+                'reaction_class': self.slices['reaction_class'],  # 添加类别切片信息
             }
 
     @property
@@ -109,7 +111,11 @@ class RetroBridgeDataset(InMemoryDataset):
     def process(self):
         table = pd.read_csv(self.split_paths[self.file_idx])
         data_list = []
-        for i, reaction_smiles in enumerate(tqdm(table['reactants>reagents>production'].values)):
+        
+        # 读取class列并转换为0-9索引
+        reaction_classes = table['class'].values - 1  # 转换为0-9索引
+        
+        for i, (reaction_smiles, reaction_class) in enumerate(tqdm(zip(table['reactants>reagents>production'].values, reaction_classes))):
             reactants_smi, _, product_smi = reaction_smiles.split('>')
             rmol = Chem.MolFromSmiles(reactants_smi)
             pmol = Chem.MolFromSmiles(product_smi)
@@ -172,11 +178,17 @@ class RetroBridgeDataset(InMemoryDataset):
                 product_mask = ~(p_x[:, -1].bool()).squeeze()
                 assert torch.allclose(r_x[product_mask], p_x[product_mask])
 
+            # 验证类别范围
+            if not (0 <= reaction_class <= 9):
+                print(f'Invalid reaction class {reaction_class + 1} at index {i}, skipping...')
+                continue
+                
             y = torch.zeros(size=(1, 0), dtype=torch.float)
             data = Data(
                 x=r_x, edge_index=r_edge_index, edge_attr=r_edge_attr, y=y, idx=i,
                 p_x=p_x, p_edge_index=p_edge_index, p_edge_attr=p_edge_attr,
                 r_smiles=reactants_smi, p_smiles=product_smi,
+                reaction_class=torch.tensor(reaction_class, dtype=torch.long)  # 新增类别字段
             )
 
             data_list.append(data)
@@ -412,7 +424,7 @@ class RetroBridgeDatasetInfos:
         self.input_dims = {
             'X': example_batch['x'].size(1),
             'E': example_batch['edge_attr'].size(1),
-            'y': example_batch['y'].size(1) + 1  # + 1 due to time conditioning
+            'y': example_batch['y'].size(1) + 1 + 10  # + 1 due to time conditioning + 10 for class
         }
 
         ex_extra_feat = extra_features(p_example_data)
@@ -432,7 +444,7 @@ class RetroBridgeDatasetInfos:
         self.output_dims = {
             'X': example_batch['x'].size(1),
             'E': example_batch['edge_attr'].size(1),
-            'y': 0
+            'y': 10  # 修改为10维以支持类别预测
         }
 
         print('Input dims:')

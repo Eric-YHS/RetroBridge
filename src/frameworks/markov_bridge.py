@@ -85,7 +85,7 @@ class MarkovBridge(pl.LightningModule):
         self.val_loss = TrainLossDiscrete(lambda_train) if loss_type != 'vlb' else TrainLossVLB(lambda_train)
         self.sampling_metrics = sampling_metrics
 
-        self.visualization_tools = None
+        self.visualization_tools = visualization_tools
         self.extra_features = extra_features
         self.domain_features = domain_features
         self.use_context = use_context
@@ -109,21 +109,10 @@ class MarkovBridge(pl.LightningModule):
             y_classes=self.ydim_output
         )
 
-        self.save_hyperparameters(
-            'experiment_name',
-            'diffusion_steps',
-            'diffusion_noise_schedule',
-            'transition',
-            'lr',
-            'weight_decay',
-            'n_layers',
-            'hidden_mlp_dims',
-            'hidden_dims',
-            'lambda_train',
-            'use_context',
-            'fix_product_nodes',
-            'loss_type'
-        )
+        self.save_hyperparameters(ignore=[
+            'train_metrics', 'sampling_metrics', 'visualization_tools', 'dataset_infos',
+            'extra_features', 'domain_features', 'input_dims', 'output_dims', 'hidden_mlp_dims', 'hidden_dims'
+        ])
 
         self.start_epoch_time = None
         self.train_iterations = None
@@ -140,6 +129,34 @@ class MarkovBridge(pl.LightningModule):
 
         self.fix_product_nodes = fix_product_nodes
         self.loss_type = loss_type
+        self.num_classes = 10  # 反应类别数量
+
+    def apply_class_noise(self, true_class, alpha_bar_t):
+        """为类别添加噪声 - 使用线性插值"""
+        batch_size = true_class.shape[0]
+        device = true_class.device
+        
+        # 创建均匀分布作为起点
+        uniform_dist = torch.ones(batch_size, self.num_classes, device=device) / self.num_classes
+        
+        # 创建one-hot分布作为终点
+        one_hot_dist = F.one_hot(true_class, self.num_classes).float()
+        
+        # 确保alpha_bar_t的形状正确
+        if alpha_bar_t.dim() == 2:
+            alpha_bar_t = alpha_bar_t.squeeze(-1)  # (bs,)
+        alpha_bar_t = alpha_bar_t.unsqueeze(-1)  # (bs, 1)
+        
+        # 线性插值: (1-alpha_bar_t) * uniform + alpha_bar_t * one_hot
+        interpolated_dist = (1 - alpha_bar_t) * uniform_dist + alpha_bar_t * one_hot_dist
+        
+        # 确保概率分布有效（和为1，非负）
+        interpolated_dist = torch.clamp(interpolated_dist, min=1e-8)
+        interpolated_dist = interpolated_dist / interpolated_dist.sum(dim=-1, keepdim=True)
+        
+        # 从插值分布中采样
+        sampled_class = torch.multinomial(interpolated_dist, 1).squeeze(-1)
+        return F.one_hot(sampled_class, self.num_classes).float()
 
     def configure_optimizers(self):
         return torch.optim.AdamW(
@@ -172,9 +189,17 @@ class MarkovBridge(pl.LightningModule):
             node_mask=node_mask,
         )
 
+        # 处理类别噪声
+        true_class = data.reaction_class  # 获取真实类别
+        noisy_class = self.apply_class_noise(true_class, noisy_data['alpha_t_bar'])
+        
         # Computing extra features + context and making predictions
         context = product.clone() if self.use_context else None
         extra_data = self.compute_extra_data(noisy_data, context=context)
+        
+        # 将噪声类别添加到extra_data.y中
+        extra_data.y = torch.cat([extra_data.y, noisy_class], dim=-1)
+        
         pred = self.forward(noisy_data, extra_data, node_mask)
 
         # Masking unchanged part
@@ -198,16 +223,16 @@ class MarkovBridge(pl.LightningModule):
                 i=i,
             )
         else:
-            return self.compute_training_CE_loss_and_metrics(reactants=reactants, pred=pred, i=i)
+            return self.compute_training_CE_loss_and_metrics(reactants=reactants, pred=pred, true_class=data.reaction_class, i=i)
 
-    def compute_training_CE_loss_and_metrics(self, reactants, pred, i):
+    def compute_training_CE_loss_and_metrics(self, reactants, pred, true_class, i):
         loss = self.train_loss(
             masked_pred_X=pred.X,
             masked_pred_E=pred.E,
             pred_y=pred.y,
             true_X=reactants.X,
             true_E=reactants.E,
-            true_y=reactants.y,
+            true_y=true_class,
         )
         self.train_metrics(
             masked_pred_X=pred.X,
@@ -228,14 +253,14 @@ class MarkovBridge(pl.LightningModule):
 
         return {'loss': loss}
 
-    def compute_validation_CE_loss(self, reactants, pred, i):
+    def compute_validation_CE_loss(self, reactants, pred, true_class, i):
         loss = self.val_loss(
             masked_pred_X=pred.X,
             masked_pred_E=pred.E,
             pred_y=pred.y,
             true_X=reactants.X,
             true_E=reactants.E,
-            true_y=reactants.y,
+            true_y=true_class,
         )
 
         if i % self.log_every_steps == 0:
@@ -311,7 +336,7 @@ class MarkovBridge(pl.LightningModule):
                 i=i,
             )
         else:
-            return self.compute_validation_CE_loss(reactants=reactants, pred=pred, i=i)
+            return self.compute_validation_CE_loss(reactants=reactants, pred=pred, true_class=data.reaction_class, i=i)
 
     def on_validation_epoch_end(self):
         self.val_counter += 1
@@ -319,7 +344,11 @@ class MarkovBridge(pl.LightningModule):
             self.sample()
             self.trainer.save_checkpoint(os.path.join(self.checkpoints_dir, 'last.ckpt'))
 
-    def sample(self):
+    def sample(self, fast_mode=True):
+        """
+        采样方法，支持快速模式
+        fast_mode: 如果为True，跳过可视化和链保存，只计算top-k指标
+        """
         samples_left_to_generate = self.samples_to_generate
         samples_left_to_save = self.samples_to_save
         chains_left_to_save = self.chains_to_save
@@ -330,7 +359,7 @@ class MarkovBridge(pl.LightningModule):
         ground_truth = []
 
         ident = 0
-        print(f'Sampling epoch={self.current_epoch}')
+        print(f'Sampling epoch={self.current_epoch} (fast_mode={fast_mode})')
 
         dataloader = self.trainer.datamodule.val_dataloader()
         for data in tqdm(dataloader, total=samples_left_to_generate // dataloader.batch_size):
@@ -340,10 +369,11 @@ class MarkovBridge(pl.LightningModule):
             data = data.to(self.device)
             bs = len(data.batch.unique())
             to_generate = bs
-            to_save = min(samples_left_to_save, bs)
-            chains_save = min(chains_left_to_save, bs)
+            to_save = min(samples_left_to_save, bs) if not fast_mode else 0
+            chains_save = min(chains_left_to_save, bs) if not fast_mode else 0
             batch_groups = []
             batch_scores = []
+            
             for sample_idx in range(self.samples_per_input):
                 molecule_list, true_molecule_list, products_list, scores, _, _ = self.sample_batch(
                     data=data,
@@ -351,8 +381,9 @@ class MarkovBridge(pl.LightningModule):
                     batch_size=to_generate,
                     save_final=to_save,
                     keep_chain=chains_save,
-                    number_chain_steps_to_save=self.number_chain_steps_to_save,
+                    number_chain_steps_to_save=0 if fast_mode else self.number_chain_steps_to_save,
                     sample_idx=sample_idx,
+                    fast_mode=fast_mode,
                 )
                 samples.extend(molecule_list)
                 batch_groups.append(molecule_list)
@@ -377,6 +408,7 @@ class MarkovBridge(pl.LightningModule):
                 grouped_samples.append(mol_samples_group)
                 grouped_scores.append(mol_scores_group)
 
+        # 计算retrosynthesis指标（包含top-k准确率）
         to_log = compute_retrosynthesis_metrics(
             grouped_samples=grouped_samples,
             ground_truth=ground_truth,
@@ -386,6 +418,7 @@ class MarkovBridge(pl.LightningModule):
         for metric_name, metric in to_log.items():
             self.log(metric_name, metric)
 
+        # 计算其他采样指标
         to_log = self.sampling_metrics(samples)
         for metric_name, metric in to_log.items():
             self.log(metric_name, metric)
@@ -462,6 +495,7 @@ class MarkovBridge(pl.LightningModule):
             sample_idx,
             save_true_reactants=True,
             use_one_hot=False,
+            fast_mode=False,
     ):
         """
         :param data
@@ -485,7 +519,8 @@ class MarkovBridge(pl.LightningModule):
             use_one_hot=use_one_hot,
         )
 
-        if self.visualization_tools is not None:
+        # 快速模式下跳过可视化
+        if self.visualization_tools is not None and not fast_mode:
             self.visualize(
                 chain_X=chain_X,
                 chain_E=chain_E,
@@ -537,6 +572,7 @@ class MarkovBridge(pl.LightningModule):
                 node_mask=node_mask,
                 context=context,
                 use_one_hot=use_one_hot,
+                current_class=None,  # 在这个方法中不使用类别信息
             )
 
             # Masking unchanged part
@@ -573,6 +609,10 @@ class MarkovBridge(pl.LightningModule):
 
         # z_T – starting state (product)
         X, E, y = product.X, product.E, torch.empty((node_mask.shape[0], 0), device=self.device)
+        
+        # 初始化类别为均匀分布
+        uniform_class = torch.ones(batch_size, self.num_classes, device=self.device) / self.num_classes
+        current_class = uniform_class
 
         assert (E == torch.transpose(E, 1, 2)).all()
         assert number_chain_steps_to_save < self.T
@@ -607,6 +647,7 @@ class MarkovBridge(pl.LightningModule):
                 node_mask=node_mask,
                 context=context,
                 use_one_hot=use_one_hot,
+                current_class=current_class,
             )
 
             # Masking unchanged part
@@ -618,10 +659,11 @@ class MarkovBridge(pl.LightningModule):
 
             X, E, y = sampled_s.X, sampled_s.E, sampled_s.y
 
-            # Save the first keep_chain graphs
-            write_index = (s_int * number_chain_steps_to_save) // self.T
-            chain_X[write_index] = discrete_sampled_s.X[:keep_chain]
-            chain_E[write_index] = discrete_sampled_s.E[:keep_chain]
+            # Save the first keep_chain graphs (only if keep_chain > 0)
+            if keep_chain > 0:
+                write_index = (s_int * number_chain_steps_to_save) // self.T
+                chain_X[write_index] = discrete_sampled_s.X[:keep_chain]
+                chain_E[write_index] = discrete_sampled_s.E[:keep_chain]
 
             nll += node_log_likelihood
             ell += edge_log_likelihood
@@ -711,7 +753,7 @@ class MarkovBridge(pl.LightningModule):
             suffix=f'_{sample_idx}'
         )
 
-    def sample_p_zs_given_zt(self, s, t, X_t, E_t, y_t, X_T, E_T, y_T, node_mask, context=None, use_one_hot=False):
+    def sample_p_zs_given_zt(self, s, t, X_t, E_t, y_t, X_T, E_T, y_T, node_mask, context=None, use_one_hot=False, current_class=None):
         # Hack: in direct MB we consider flipped time flow
         bs, n = X_t.shape[:2]
         t = 1 - t
@@ -720,6 +762,15 @@ class MarkovBridge(pl.LightningModule):
         # Neural net predictions
         noisy_data = {'X_t': X_t, 'E_t': E_t, 'y_t': y_t, 't': t, 'node_mask': node_mask}
         extra_data = self.compute_extra_data(noisy_data, context=context)
+        
+        # 如果提供了类别信息，将其添加到extra_data中
+        if current_class is not None:
+            extra_data.y = torch.cat([extra_data.y, current_class], dim=-1)
+        else:
+            # 如果没有提供类别，使用均匀分布
+            uniform_class = torch.ones(bs, self.num_classes, device=self.device) / self.num_classes
+            extra_data.y = torch.cat([extra_data.y, uniform_class], dim=-1)
+        
         pred = self.forward(noisy_data, extra_data, node_mask)
 
         # Normalize predictions

@@ -279,7 +279,8 @@ class GraphTransformer(nn.Module):
         if self.addition:
             X = (X + X_to_out)
             E = (E + E_to_out)
-            y = y + y_to_out
+            # 对于y不使用residual connection，因为输入y和输出y语义不同
+            # y = y + y_to_out
 
         E = E * diag_mask
         E = 1/2 * (E + torch.transpose(E, 1, 2))

@@ -23,14 +23,19 @@ def find_last_checkpoint(checkpoints_dir):
     if 'last.ckpt' in os.listdir(checkpoints_dir):
         return os.path.join(checkpoints_dir, 'last.ckpt')
 
-    top_5_checkpoints_dir = os.path.join(checkpoints_dir, 'top_5_accuracy')
-    epoch2fname = [
-        (int(fname.split('_')[0].split('=')[1]), fname)
-        for fname in os.listdir(top_5_checkpoints_dir)
-        if fname.endswith('.ckpt')
-    ]
-    latest_fname = max(epoch2fname, key=lambda t: t[0])[1]
-    return os.path.join(top_5_checkpoints_dir, latest_fname)
+    best_checkpoints_dir = os.path.join(checkpoints_dir, 'best_accuracy')
+    if os.path.exists(best_checkpoints_dir) and os.listdir(best_checkpoints_dir):
+        epoch2fname = [
+            (int(fname.split('_')[0].split('=')[1]), fname)
+            for fname in os.listdir(best_checkpoints_dir)
+            if fname.endswith('.ckpt')
+        ]
+        if epoch2fname:
+            latest_fname = max(epoch2fname, key=lambda t: t[0])[1]
+            return os.path.join(best_checkpoints_dir, latest_fname)
+    
+    # 如果没有找到检查点，返回None
+    return None
 
 
 def main(args):
@@ -170,42 +175,46 @@ def main(args):
             samples_per_input=args.samples_per_input,
         )
 
-    top_1_checkpoints_dir = os.path.join(checkpoints_dir, 'top_1_accuracy')
-    top_5_checkpoints_dir = os.path.join(checkpoints_dir, 'top_5_accuracy')
-    os.makedirs(top_1_checkpoints_dir, exist_ok=True)
-    os.makedirs(top_5_checkpoints_dir, exist_ok=True)
+    best_checkpoints_dir = os.path.join(checkpoints_dir, 'best_accuracy')
+    os.makedirs(best_checkpoints_dir, exist_ok=True)
 
     checkpoint_callbacks = [
         callbacks.ModelCheckpoint(
-            dirpath=top_1_checkpoints_dir,
-            filename='{epoch:03d}_{top_1_accuracy:.3f}',
+            dirpath=best_checkpoints_dir,
+            filename='{epoch:03d}_{val_y_accuracy:.3f}',
             save_top_k=5,
-            monitor=f'top_1_accuracy',
+            monitor='val_loss/y_accuracy',
             mode='max',
-            every_n_epochs=args.sample_every_val,
-        ),
-        callbacks.ModelCheckpoint(
-            dirpath=top_5_checkpoints_dir,
-            filename='{epoch:03d}_{top_5_accuracy:.3f}',
-            save_top_k=5,
-            monitor=f'top_5_accuracy',
-            mode='max',
-            every_n_epochs=args.sample_every_val,
         )
     ]
 
-    wandb_logger = None if args.disable_wandb else loggers.WandbLogger(
+    # 配置loggers
+    loggers_list = []
+    
+    # WandB logger
+    if not args.disable_wandb:
+        wandb_logger = loggers.WandbLogger(
+            save_dir=args.logs,
+            project='RetroBridge',
+            group=args.dataset,
+            name=experiment,
+            id=experiment,
+            resume='must' if args.resume is not None else 'allow',
+            entity=args.wandb_entity,
+        )
+        loggers_list.append(wandb_logger)
+    
+    # TensorBoard logger (总是启用)
+    tb_logger = loggers.TensorBoardLogger(
         save_dir=args.logs,
-        project='RetroBridge',
-        group=args.dataset,
-        name=experiment,
-        id=experiment,
-        resume='must' if args.resume is not None else 'allow',
-        entity=args.wandb_entity,
+        name='tensorboard',
+        version=experiment,
     )
+    loggers_list.append(tb_logger)
+    
     trainer = Trainer(
         max_epochs=args.n_epochs,
-        logger=wandb_logger,
+        logger=loggers_list,
         callbacks=checkpoint_callbacks,
         accelerator=args.device,
         devices=1,

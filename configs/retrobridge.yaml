@@ -8,7 +8,7 @@ seed: 42
 device: gpu
 
 # Settings
-sample_every_val: 1
+sample_every_val: 20
 log_every_steps: 50
 samples_to_generate: 128
 samples_to_save: 128
@@ -19,8 +19,8 @@ enable_progress_bar: True
 
 # Data
 dataset: uspto50k
-batch_size: 128
-num_workers: 16
+batch_size: 64
+num_workers: 0
 shuffle: True
 extra_nodes: True
 swap: False
@@ -36,24 +36,25 @@ use_context: True
 extra_features: all
 extra_molecular_features: True
 n_layers: 5
-hidden_mlp_dims: { "X": 256, "E": 128, "y": 128 }
+hidden_mlp_dims:
+  X: 256
+  E: 128
+  y: 128
 hidden_dims:
-  {
-    "dx": 256,
-    "de": 64,
-    "dy": 64,
-    "n_head": 8,
-    "dim_ffX": 256,
-    "dim_ffE": 128,
-    "dim_ffy": 128,
-  }
+  dx: 256
+  de: 64
+  dy: 64
+  n_head: 8
+  dim_ffX: 256
+  dim_ffE: 128
+  dim_ffy: 128
 
 # Training
 n_epochs: 1000
-lambda_train: [5, 0]
+lambda_train: [5, 1]
 lr: 0.0002
 weight_decay: 0.000000000001
 loss_type: cross_entropy
 
 # Checkpoint
-resume:
+resume: retrobridge_20_07_17_08_28
