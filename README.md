@@ -1,6 +1,7 @@
 # RetroBridge: Modeling Retrosynthesis with Markov Bridges
 
 <a href="https://openreview.net/forum?id=770DetV8He"><img src="https://img.shields.io/badge/ICLR-2024-brown.svg" height=22.5></a>
+<a href="https://github.com/Eric-YHS/RetroBridge/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Eric-YHS/RetroBridge/ci.yml?branch=master&logo=githubactions&logoColor=white&label=CI" height=22.5></a>
 
 Official implementation of RetroBridge, a [**Markov bridge model for retrosynthesis planning**](https://arxiv.org/abs/2308.16212) by Ilia Igashov*, Arne Schneuing*, Marwin Segler, Michael Bronstein and Bruno Correia.
 
@@ -20,6 +21,22 @@ conda create --name retrobridge python=3.9 rdkit=2023.09.5 -c conda-forge -y
 conda activate retrobridge
 pip install -r requirements.txt
 ```
+
+## Data
+
+The configs point at `data: data` and `dataset: uspto50k`, so the dataset root is `data/uspto50k`
+(PyG uses `<root>/raw` for the CSVs):
+
+```
+data/uspto50k/
+├── raw/                                # uspto50k_{train,val,test}.csv (committed; also auto-downloadable from Zenodo)
+└── processed_retrobridge[_extra_nodes]/ # generated PyG graphs: train.pt / val.pt / test.pt (git-ignored)
+```
+
+You do not have to download anything manually: `RetroBridgeDataset.download()` fetches the splits
+from [Zenodo](https://zenodo.org/record/8114657) on first use, and the MIT variant fetches
+`data.zip` from the [rexgen repo](https://github.com/wengong-jin/nips17-rexgen) and converts the `.txt`
+splits to CSV. `process()` then caches the featurized graphs under `processed_retrobridge*`.
 
 ## Example
 
@@ -72,9 +89,9 @@ python sample.py \
        --sampling_seed 1
 ```
 
-Sampling with ForwardBridge:
+Sampling with ForwardBridge (the MIT variant lives in the `mit/` directory, there is no `sample_MIT.py`):
 ```shell
-python sample_MIT.py \
+python mit/sample.py \
        --config configs/forwardbridge.yaml \
        --checkpoint models/forwardbridge.ckpt \
        --samples samples \
@@ -93,7 +110,7 @@ Download Molecular Transformer and follow the instructions on their [GitHub page
 
 To make forward predictions for all generated reactants, run:
 ```bash
-python /src/metrics/round_trip.py --csv_file <path/to/retrobridge_csv> --csv_out <path/to/output_csv> --mol_trans_dir <path/to/MolecularTransformer_dir>
+python src/metrics/round_trip.py --csv_file <path/to/retrobridge_csv> --csv_out <path/to/output_csv> --mol_trans_dir <path/to/MolecularTransformer_dir>
 ```
 
 ### Metrics

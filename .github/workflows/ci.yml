@@ -1,0 +1,102 @@
+name: CI
+
+# Static checks only: the training/sampling code needs torch + torch_geometric + rdkit and the
+# USPTO graphs, which is too heavy for a lint job. What IS checked on every push/PR:
+#   * every Python module still compiles (catches syntax errors in train/sample/predict and src/)
+#   * the YAML configs parse and keep the keys the entry points read
+#   * the committed USPTO split CSVs are present with the expected columns
+#   * no model weights / generated graphs got committed by accident
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  static:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install tooling
+        run: python -m pip install --upgrade pip pyyaml
+
+      - name: Byte-compile all Python sources
+        run: python -m compileall -q .
+
+      - name: Validate configs
+        run: |
+          python - <<'PY'
+          import sys, yaml
+          from pathlib import Path
+
+          # keys that train.py / sample.py read out of the config
+          required = ["data", "dataset", "batch_size", "diffusion_steps", "checkpoints", "logs"]
+          failed = False
+          for path in sorted(Path("configs").glob("*.yaml")):
+              try:
+                  cfg = yaml.safe_load(path.read_text(encoding="utf-8"))
+              except Exception as exc:
+                  print(f"::error file={path}::{path} is not valid YAML: {exc}")
+                  failed = True
+                  continue
+              if not isinstance(cfg, dict):
+                  print(f"::error file={path}::{path} must contain a mapping")
+                  failed = True
+                  continue
+              missing = [k for k in required if k not in cfg]
+              if missing:
+                  print(f"::error file={path}::{path} is missing key(s): {', '.join(missing)}")
+                  failed = True
+              else:
+                  print(f"ok  {path}  (data={cfg['data']}, dataset={cfg['dataset']})")
+          sys.exit(1 if failed else 0)
+          PY
+
+      - name: Check the committed USPTO splits
+        run: |
+          python - <<'PY'
+          import csv, sys
+          from pathlib import Path
+
+          root = Path("data/uspto50k/raw")
+          # RetroBridgeDataset reads the reaction column by splitting the header on '>'
+          # (see src/data/retrobridge_dataset.py), so the CSV must keep that shape.
+          expected_header = ["id", "class", "reactants>reagents>production"]
+          failed = False
+          for split in ("train", "val", "test"):
+              path = root / f"uspto50k_{split}.csv"
+              if not path.is_file():
+                  print(f"::error file={path}::{path} is missing (tracked in git, configs point at data/uspto50k)")
+                  failed = True
+                  continue
+              with path.open(encoding="utf-8", newline="") as fh:
+                  header = next(csv.reader(fh), [])
+              if header != expected_header:
+                  print(f"::error file={path}::{path} header is {header}, expected {expected_header}")
+                  failed = True
+              else:
+                  print(f"ok  {path}  header={header}")
+          sys.exit(1 if failed else 0)
+          PY
+
+      - name: Check no large artifacts are tracked
+        run: |
+          bad=$(git ls-files | grep -E '\.(ckpt|pth|pt|zip|egg-info)$|^models/|processed_retrobridge' || true)
+          if [ -n "$bad" ]; then
+            echo "Model weights / processed graphs should stay out of git (download from Zenodo instead):"
+            echo "$bad"
+            exit 1
+          fi
+          echo "ok  no checkpoints or processed graphs tracked"

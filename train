@@ -1,1 +1,0 @@
-python train.py --config configs/retrobridge.yaml --model RetroBridge --disable_wandb

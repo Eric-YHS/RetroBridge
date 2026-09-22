@@ -1,2 +1,26 @@
-.idea
-__pycache__
+# Editors
+.idea/
+.vscode/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Datasets / processed graphs (regenerated locally, the raw CSVs live in data/uspto50k/raw)
+datasets/
+data/uspto50k/processed_*/
+data/uspto50k/raw/data.zip
+*.pkl
+
+# Model weights & run outputs
+models/
+*.ckpt
+*.pth
+samples/
+logs/
+lightning_logs/
+wandb/
+.ipynb_checkpoints/
